@@ -40,9 +40,9 @@ tests/
 ```bash
 python -m venv .venv && .venv/Scripts/activate      # Windows; `source .venv/bin/activate` elsewhere
 pip install -r backend/requirements.txt
-cp .env.example .env                                 # add ANTHROPIC_API_KEY (LLM_API_KEY also works)
+cp .env.example .env                                 # add GEMINI_API_KEY (free) or ANTHROPIC_API_KEY
 uvicorn app.main:app --reload --app-dir backend
-pytest                                               # 30 tests, no network, no API key needed
+pytest                                               # 62 tests, no network, no API key needed
 ```
 
 ```bash

@@ -28,6 +28,9 @@ STRICT RULES:
    a cricket match) and must map EVERY key concept listed below to a specific part of
    that scene. One scene, not several. Fill `analogy_map` with one entry per concept,
    using the concept exactly as spelled in the list.
+   Do not introduce extra characters or props that stand for nothing — no unnamed chef,
+   helper or machine doing the work alongside a concept that is already doing it. If it
+   appears in the analogy, it maps to a concept; if it maps to nothing, cut it.
 5. `textbook_excerpt` must be a near-verbatim quote copied from the textbook content —
    one or two sentences, no paraphrasing.
 6. `topic` is a short noun phrase naming what this page teaches.
