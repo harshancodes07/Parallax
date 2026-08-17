@@ -7,6 +7,7 @@ guessing, and we check for that marker rather than trying to read refusal out
 of prose.
 """
 
+import functools
 import re
 
 import anthropic
@@ -14,7 +15,12 @@ import anthropic
 from .config import ANSWER_MODEL, REFUSAL_SENTINEL
 from .retriever import format_context, retrieve
 
-_client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
+
+@functools.lru_cache(maxsize=1)
+def _get_client() -> anthropic.Anthropic:
+    """Built on first use, not at import — reading ANTHROPIC_API_KEY eagerly
+    would break `import rag` for anyone who only needs retrieval."""
+    return anthropic.Anthropic()
 
 SYSTEM = f"""You are helping a school student understand one page of their own textbook.
 
@@ -48,7 +54,7 @@ def answer(doc_id: str, question: str) -> dict:
         }
 
     context = format_context(hit["chunks"])
-    resp = _client.messages.create(
+    resp = _get_client().messages.create(
         model=ANSWER_MODEL,
         # max_tokens caps thinking + visible text together on Opus 5, so leave
         # headroom above the length of the answer you actually want.
