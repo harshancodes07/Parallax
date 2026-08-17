@@ -9,6 +9,10 @@ this file, it is the most conflict-prone file in the repo.
 
 from __future__ import annotations
 
+import shared.clients
+import shared.http_session
+import shared.transport
+import shared.session
 import logging
 
 from dotenv import load_dotenv
