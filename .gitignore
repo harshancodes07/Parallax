@@ -16,8 +16,6 @@ build/
 .vite/
 
 # Secrets & config
-.env
-.env.*
 !.env.example
 *.pem
 credentials.json
@@ -37,9 +35,9 @@ models/
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/*
 !.vscode/extensions.json
 
 # Logs
 *.log
 logs/
+config.bat
