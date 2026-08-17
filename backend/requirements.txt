@@ -1,0 +1,35 @@
+# Backend dependencies. Other branches: append your own, don't reorder.
+
+# --- core (tutor branch) ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+anthropic>=0.70
+python-dotenv>=1.0
+python-multipart>=0.0.9   # audio uploads on /listen and /ask
+
+# --- tests ---
+pytest>=8.0
+httpx>=0.27          # fastapi TestClient
+
+# --- AI4Bharat models (all optional; each degrades to a documented fallback) ---
+# Install in this order — torch first, then the rest.
+#
+#   pip install torch torchaudio
+#   pip install transformers IndicTransToolkit          # IndicTrans2 (3 directions)
+#   pip install ai4bharat-transliteration               # IndicXlit
+#   pip install onnxruntime                             # IndicConformer ASR
+#   pip install git+https://github.com/huggingface/parler-tts.git soundfile
+#
+# Rough disk cost on first run: IndicTrans2 ~1GB per direction (3 dirs),
+# IndicConformer ~2.4GB, Parler-TTS ~3GB. Do NOT let this download for the
+# first time during the demo — warm them the night before.
+#
+# torch>=2.2
+# torchaudio>=2.2
+# transformers>=4.40
+# IndicTransToolkit>=1.0
+# ai4bharat-transliteration>=1.1.3
+# onnxruntime>=1.20.1
+# soundfile>=0.12
+# parler-tts @ git+https://github.com/huggingface/parler-tts.git
