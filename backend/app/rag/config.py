@@ -20,9 +20,15 @@ CHUNK_OVERLAP_WORDS = 40
 TOP_K = 4
 
 # Grounding cutoff: cosine similarity below this means "not in this chapter".
-# Do NOT trust this default — run backend/scripts/calibrate.py against a real chapter
-# and set it where in-scope and out-of-scope questions separate.
-SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.80"))
+# 0.81 is measured, not guessed — see backend/scripts/calibrate.py. Re-run it
+# against a real chapter before the demo and move this if the gap shifts.
+SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.81"))
+
+# Translate the query to English before embedding. Cross-lingual embedding does
+# not separate in-scope from out-of-scope questions well enough to ground on —
+# see translate.py for the numbers. Costs one model call per question.
+TRANSLATE_QUERIES = os.getenv("TRANSLATE_QUERIES", "1") == "1"
+TRANSLATE_MODEL = os.getenv("TRANSLATE_MODEL", "claude-opus-5")
 
 VECTOR_STORE_PATH = os.getenv("VECTOR_STORE_PATH", "./data/vectorstore")
 

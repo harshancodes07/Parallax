@@ -10,6 +10,10 @@ gap and set RAG_SCORE_THRESHOLD in .env.
 
 Run this before the demo. It is also the evidence for the "what stops it from
 inventing?" question the judges will ask.
+
+Write the questions in ENGLISH. This measures the embedder directly, and
+retrieve() translates to English before it embeds, so English questions are what
+the threshold actually applies to.
 """
 
 import json

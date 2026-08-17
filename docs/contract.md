@@ -24,12 +24,17 @@ but must still appear in the list.
 
 `rag.retrieve(doc_id, question, k=4) -> Retrieval`
 
+Ask in whatever language the student typed — the question is translated to
+English internally before embedding, and `search_text` reports what was
+actually searched.
+
 In scope:
 
 ```python
 {
   "in_scope": True,
   "top_score": 0.82,
+  "search_text": "What is photosynthesis?",
   "chunks": [
     {"chunk_id": "a3f9c1-p1-c0", "page": 1, "text": "...", "score": 0.82},
     {"chunk_id": "a3f9c1-p1-c1", "page": 1, "text": "...", "score": 0.71}
@@ -44,6 +49,7 @@ Out of scope:
   "in_scope": False,
   "top_score": 0.31,
   "reason": "below_threshold",     # or "empty_index"
+  "search_text": "What is the capital of France?",
   "chunks": []
 }
 ```
