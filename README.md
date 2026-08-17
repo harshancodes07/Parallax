@@ -56,8 +56,8 @@ Frontend setup goes here once the UI PR lands.
 ## Tests
 
 ```bash
-pytest backend/tests -m "not slow"   # 56 tests, ~6s, no model download
-pytest backend/tests                 # adds the grounding tests (~1GB model on first run)
+pytest -m "not slow"   # fast: no model download, no API key
+pytest                 # adds the grounding + integration tests (~1GB model on first run)
 ```
 
 The `slow` tests load the real embedding model and assert on real similarity

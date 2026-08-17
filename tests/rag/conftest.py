@@ -21,7 +21,8 @@ import types
 
 import pytest
 
-BACKEND = pathlib.Path(__file__).resolve().parents[1]
+REPO = pathlib.Path(__file__).resolve().parents[2]
+BACKEND = REPO / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 

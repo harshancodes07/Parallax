@@ -6,7 +6,7 @@ question into a refusal.
 """
 
 import pytest
-from conftest import fake_response
+from tests.rag.conftest import fake_response
 
 from app.rag.translate import to_english
 

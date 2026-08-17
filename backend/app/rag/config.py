@@ -30,6 +30,18 @@ SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.81"))
 TRANSLATE_QUERIES = os.getenv("TRANSLATE_QUERIES", "1") == "1"
 TRANSLATE_MODEL = os.getenv("TRANSLATE_MODEL", "claude-opus-5")
 
+# Key terms stored on each chunk at ingest. The tutor's analogy-coverage and
+# regional-language checks both run off this list, so an empty one disables both
+# guardrails silently. Extracted once per upload, not per query.
+CONCEPT_MODEL = os.getenv("CONCEPT_MODEL", "claude-opus-5")
+CONCEPT_MAX = int(os.getenv("CONCEPT_MAX", "6"))
+
+# Ask the model whether the retrieved page actually answers the question before
+# reporting it in scope. Similarity alone cannot make this call for a
+# same-subject question — see the numbers in guardrail.py — and the tutor treats
+# is_in_scope as final, so the check belongs on this side of the seam.
+SCOPE_CHECK = os.getenv("RAG_SCOPE_CHECK", "1") == "1"
+
 VECTOR_STORE_PATH = os.getenv("VECTOR_STORE_PATH", "./data/vectorstore")
 
 ANSWER_MODEL = os.getenv("ANSWER_MODEL", "claude-opus-5")

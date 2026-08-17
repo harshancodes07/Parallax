@@ -39,6 +39,21 @@ app.include_router(tutor_router)
 # app.include_router(teachback_router)
 # app.include_router(practice_router)
 
+# Swap the tutor's mock retriever for the real one. Kept tolerant on purpose:
+# importing this pulls in sentence-transformers and Chroma, and a teammate
+# working on the tutor alone should still get a running app rather than an
+# ImportError at startup. The mock stays in place if it fails.
+try:
+    from app.rag.tutor_provider import fetch_grounding
+    from app.tutor.router import set_grounding_provider
+
+    set_grounding_provider(fetch_grounding)
+    logging.getLogger(__name__).info("tutor grounding: real RAG retriever")
+except Exception as exc:  # noqa: BLE001
+    logging.getLogger(__name__).warning(
+        "tutor grounding: falling back to the mock retriever (%s)", exc
+    )
+
 
 @app.get("/health")
 def health() -> dict[str, str]:

@@ -13,14 +13,22 @@ from .store import query
 from .translate import to_english
 
 
-def retrieve(doc_id: str, question: str, k: int = TOP_K) -> dict:
+def retrieve(
+    doc_id: str, question: str, k: int = TOP_K, translate: bool | None = None
+) -> dict:
     """Returns the Retrieval shape from docs/contract.md.
 
     `question` is the student's own wording, in any language. `search_text` on
     the result is what was actually embedded — useful when a refusal looks
     wrong and you need to see whether translation was the cause.
+
+    `translate=False` when the caller has already reached English. The tutor's
+    `query_prep` does, so translating again would spend a model call turning
+    English into English and let the wording drift before it is embedded.
+    `None` follows the TRANSLATE_QUERIES setting.
     """
-    search_text = to_english(question) if TRANSLATE_QUERIES else question
+    should_translate = TRANSLATE_QUERIES if translate is None else translate
+    search_text = to_english(question) if should_translate else question
     chunks = query(doc_id, search_text, k)
 
     if not chunks:

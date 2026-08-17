@@ -7,7 +7,7 @@ layer is the primary gate for that band, and these tests are the contract for
 it. Every path that returns `grounded: True` is a path that can hallucinate.
 """
 
-from conftest import fake_response
+from tests.rag.conftest import fake_response
 
 from app.rag.config import REFUSAL_SENTINEL
 from app.rag.guardrail import answer
@@ -158,3 +158,63 @@ class TestRequestShape:
         tamil = "ஒளிச்சேர்க்கை என்றால் என்ன?"
         answer("d", tamil)
         assert tamil in calls[0]["messages"][0]["content"]
+
+
+class TestIsAnswerable:
+    """The scope check the tutor seam depends on.
+
+    This is the gate that actually rejects a same-subject question the page
+    does not answer — similarity cannot, and the tutor treats the verdict as
+    final.
+    """
+
+    CHUNKS = [{"page": 1, "text": "Photosynthesis happens in the leaves.", "score": 0.84}]
+
+    def test_in_chapter_reply_admits(self, stub_client):
+        from app.rag.guardrail import is_answerable
+
+        stub_client(fake_response("IN_CHAPTER"))
+        assert is_answerable("What is photosynthesis?", self.CHUNKS) is True
+
+    def test_sentinel_reply_rejects(self, stub_client):
+        from app.rag.guardrail import is_answerable
+
+        stub_client(fake_response(REFUSAL_SENTINEL))
+        assert is_answerable("What is respiration in plants?", self.CHUNKS) is False
+
+    def test_no_chunks_is_never_answerable(self, stub_client):
+        from app.rag.guardrail import is_answerable
+
+        calls = stub_client(fake_response("IN_CHAPTER"))
+        assert is_answerable("q", []) is False
+        assert calls == [], "nothing to check against, so nothing to spend"
+
+    def test_safety_refusal_rejects(self, stub_client):
+        from app.rag.guardrail import is_answerable
+
+        stub_client(fake_response(None, stop_reason="refusal"))
+        assert is_answerable("q", self.CHUNKS) is False
+
+    def test_outage_fails_open(self, stub_client):
+        """Failing closed would answer 'that isn't in this chapter' to every
+        question during an outage — indistinguishable from a working guardrail,
+        and far harder to notice than an over-permissive one."""
+        from app.rag.guardrail import is_answerable
+
+        stub_client(None, raises=RuntimeError("connection reset"))
+        assert is_answerable("What is photosynthesis?", self.CHUNKS) is True
+
+    def test_empty_reply_fails_open(self, stub_client):
+        from app.rag.guardrail import is_answerable
+
+        stub_client(fake_response(None))
+        assert is_answerable("q", self.CHUNKS) is True
+
+    def test_excerpts_and_question_both_reach_the_model(self, stub_client):
+        from app.rag.guardrail import is_answerable
+
+        calls = stub_client(fake_response("IN_CHAPTER"))
+        is_answerable("What is photosynthesis?", self.CHUNKS)
+        content = calls[0]["messages"][0]["content"]
+        assert "[p.1] Photosynthesis happens in the leaves." in content
+        assert "What is photosynthesis?" in content

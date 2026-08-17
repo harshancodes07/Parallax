@@ -8,12 +8,15 @@ of prose.
 """
 
 import functools
+import logging
 import re
 
 import anthropic
 
 from .config import ANSWER_MODEL, REFUSAL_SENTINEL
 from .retriever import format_context, retrieve
+
+log = logging.getLogger(__name__)
 
 
 @functools.lru_cache(maxsize=1)
@@ -40,6 +43,65 @@ Otherwise:
 - Answer in the language the student asked in, simply enough for a 14-year-old."""
 
 _CITATION_RE = re.compile(r"\[p\.(\d+)\]")
+
+SCOPE_SYSTEM = f"""You decide one thing: do these textbook excerpts contain the answer to the student's question?
+
+The excerpts are the entire world. Being about the same subject is not enough —
+a page about photosynthesis does not answer a question about respiration, even
+though both are plant biology.
+
+Reply with exactly one word:
+IN_CHAPTER        - the excerpts answer the question
+{REFUSAL_SENTINEL}    - they do not, or you are unsure
+
+Nothing else. No explanation."""
+
+
+def is_answerable(question: str, chunks: list[dict]) -> bool:
+    """Can these excerpts answer this question?
+
+    The similarity gate cannot make this call for a question on the chapter's
+    own subject — "respiration" scores 0.844 against a photosynthesis page and
+    the worst genuine in-scope question scores 0.846 — so this is where that
+    decision actually gets made.
+
+    Fails OPEN: if the model is unreachable the question is treated as in scope
+    and the downstream grounding checks carry the load. Failing closed would
+    turn one outage into "that isn't in this chapter" for every question, which
+    looks exactly like a working guardrail and is far harder to spot.
+    """
+    if not chunks:
+        return False
+
+    try:
+        resp = _get_client().messages.create(
+            model=ANSWER_MODEL,
+            max_tokens=1000,
+            output_config={"effort": "low"},
+            system=SCOPE_SYSTEM,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"<excerpts>\n{format_context(chunks)}\n</excerpts>\n\n"
+                        f"Question: {question}"
+                    ),
+                }
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 - an outage must not refuse everything
+        log.warning("scope check unavailable (%s); admitting on similarity alone", exc)
+        return True
+
+    if resp.stop_reason == "refusal":
+        return False
+
+    text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    if not text:
+        log.warning("scope check returned nothing; admitting on similarity alone")
+        return True
+
+    return REFUSAL_SENTINEL not in text
 
 
 def answer(doc_id: str, question: str) -> dict:
