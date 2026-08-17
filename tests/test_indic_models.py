@@ -1,0 +1,293 @@
+"""The AI4Bharat layer: language routing, degradation, and the endpoints.
+
+Every model is stubbed. What these tests actually assert is the *contract* around
+the models — that the right checkpoint is chosen for each direction, that a
+missing model degrades instead of raising, and that composition is never silently
+replaced by translation.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.tutor import lesson_generator, mock_rag_service, tamil_quality
+from app.tutor.indic import languages, translate, transliterate
+from app.tutor.schemas import ExplanationOrigin, LessonSource
+from tests.conftest import GOOD_LESSON, GOOD_TAMIL, FakeClient
+
+CHUNK = mock_rag_service.PHOTOSYNTHESIS
+
+
+@pytest.fixture(autouse=True)
+def no_backtranslation(monkeypatch):
+    """Default: IndicTrans2 validation unavailable, so tests don't try to load 1GB."""
+    monkeypatch.setattr(tamil_quality.translate, "to_english", lambda text, lang: None)
+
+
+# ------------------------------------------------------------------ language registry
+
+
+def test_five_languages_are_registered():
+    assert set(languages.LANGUAGES) == {"ta", "hi", "te", "kn", "ml"}
+
+
+@pytest.mark.parametrize(
+    ("code", "flores", "asr_code"),
+    [
+        ("ta", "tam_Taml", "ta"),
+        ("hi", "hin_Deva", "hi"),
+        ("te", "tel_Telu", "te"),
+        ("kn", "kan_Knda", "kn"),
+        ("ml", "mal_Mlym", "ml"),
+    ],
+)
+def test_every_language_carries_the_codes_each_model_wants(code, flores, asr_code):
+    lang = languages.get(code)
+    assert lang.flores == flores
+    assert lang.asr == asr_code
+    assert lang.tts_voice and lang.local_analogy_hint
+
+
+def test_unknown_language_falls_back_to_tamil_rather_than_raising():
+    assert languages.get("klingon").code == "ta"
+    assert languages.get(None).code == "ta"
+
+
+# ------------------------------------------------------------------ direction routing
+
+
+@pytest.mark.parametrize(
+    ("src", "tgt", "expected"),
+    [
+        ("eng_Latn", "tam_Taml", "EN_INDIC"),
+        ("tam_Taml", "eng_Latn", "INDIC_EN"),
+        ("tam_Taml", "tel_Telu", "INDIC_INDIC"),
+        ("hin_Deva", "mal_Mlym", "INDIC_INDIC"),
+    ],
+)
+def test_the_right_checkpoint_is_chosen_for_each_direction(src, tgt, expected):
+    """Indic→Indic must not be routed through English — that is the 320M model's job."""
+    holder = translate._engine_for(src, tgt)
+    assert holder is getattr(translate, expected)
+
+
+def test_translate_returns_none_when_the_model_cannot_load(monkeypatch):
+    monkeypatch.setattr(translate.EN_INDIC, "get", lambda: None)
+
+    assert translate.from_english("hello", "ta") is None
+
+
+def test_translate_short_circuits_when_source_and_target_match():
+    assert translate.translate("same", src_flores="tam_Taml", tgt_flores="tam_Taml") == "same"
+
+
+# ------------------------------------------------------------------ IndicXlit routing
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("thavaram epdi saapdum", True),
+        ("prakasha samsleshanam", True),
+        ("how do plants make food", False),  # plain English — must be left alone
+        ("what is photosynthesis", False),
+        ("தாவரம் எப்படி சாப்பிடும்", False),  # already native script
+    ],
+)
+def test_only_romanised_regional_queries_are_transliterated(text, expected, monkeypatch):
+    monkeypatch.setattr(transliterate, "to_native", lambda t, lang: "தாவரம் எப்படி சாப்பிடும்")
+
+    _, was_transliterated = transliterate.normalise_query(text, "ta")
+
+    assert was_transliterated is expected
+
+
+def test_query_is_unchanged_when_indicxlit_is_unavailable(monkeypatch):
+    monkeypatch.setattr(transliterate, "to_native", lambda t, lang: None)
+
+    query, changed = transliterate.normalise_query("thavaram epdi saapdum", "ta")
+
+    assert query == "thavaram epdi saapdum"
+    assert changed is False
+
+
+# ------------------------------------------------------------------ composition vs translation
+
+
+def test_regional_explanation_is_composed_not_translated(monkeypatch):
+    """The whole point of the branch: en→indic must not run on the happy path."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        translate, "from_english", lambda text, lang: calls.append(lang) or "translated"
+    )
+
+    client = FakeClient(json_responses=[GOOD_LESSON], tamil_responses=[GOOD_TAMIL])
+    lesson = lesson_generator.generate(CHUNK, None, client=client)
+
+    assert lesson.regional_origin is ExplanationOrigin.COMPOSED
+    assert lesson.tamil_explanation == GOOD_TAMIL
+    assert calls == [], "en→indic ran on the happy path — composition was bypassed"
+
+
+def test_en_indic_is_the_fallback_when_composition_is_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        translate, "from_english", lambda text, lang: "पौधे सूरज की रोशनी से भोजन बनाते हैं।"
+    )
+
+    # No tamil_responses -> the composition call raises LLMUnavailable.
+    client = FakeClient(json_responses=[GOOD_LESSON], tamil_responses=[])
+    lesson = lesson_generator.generate(CHUNK, None, language="hi", client=client)
+
+    assert lesson.regional_origin is ExplanationOrigin.TRANSLATED_FROM_ENGLISH
+    assert lesson.tamil_explanation.startswith("पौधे")
+    assert "IndicTrans2 en→indic (fallback)" in lesson.trace.ai4bharat_models_used
+    # Still a real lesson, not a refusal.
+    assert lesson.grounded is True
+
+
+def test_extra_languages_translate_from_the_composed_text_not_the_english(monkeypatch):
+    """Indic→Indic keeps the teacher voice; going via English would flatten it."""
+    seen: dict = {}
+
+    def fake_between_indic(text, *, source_code, target_code):
+        seen[target_code] = (text, source_code)
+        return f"[{target_code}] {text[:12]}"
+
+    monkeypatch.setattr(translate, "between_indic", fake_between_indic)
+    monkeypatch.setattr(
+        translate, "from_english", lambda text, lang: pytest.fail("en→indic should not run")
+    )
+
+    client = FakeClient(json_responses=[GOOD_LESSON], tamil_responses=[GOOD_TAMIL])
+    lesson = lesson_generator.generate(
+        CHUNK, None, translate_to=["te", "ml"], client=client
+    )
+
+    assert [t.language for t in lesson.translations] == ["te", "ml"]
+    assert all(t.origin is ExplanationOrigin.TRANSLATED_FROM_REGIONAL for t in lesson.translations)
+    # It translated the composed Tamil, not the English explanation.
+    assert seen["te"] == (GOOD_TAMIL, "ta")
+
+
+def test_extra_languages_fall_back_to_english_when_indic_indic_is_down(monkeypatch):
+    monkeypatch.setattr(translate, "between_indic", lambda text, **kw: None)
+    monkeypatch.setattr(translate, "from_english", lambda text, lang: f"[{lang}] from english")
+
+    client = FakeClient(json_responses=[GOOD_LESSON], tamil_responses=[GOOD_TAMIL])
+    lesson = lesson_generator.generate(CHUNK, None, translate_to=["hi"], client=client)
+
+    assert lesson.translations[0].origin is ExplanationOrigin.TRANSLATED_FROM_ENGLISH
+
+
+def test_extra_languages_are_skipped_not_faked_when_no_translator_exists(monkeypatch):
+    monkeypatch.setattr(translate, "between_indic", lambda text, **kw: None)
+    monkeypatch.setattr(translate, "from_english", lambda text, lang: None)
+
+    client = FakeClient(json_responses=[GOOD_LESSON], tamil_responses=[GOOD_TAMIL])
+    lesson = lesson_generator.generate(CHUNK, None, translate_to=["hi"], client=client)
+
+    assert lesson.translations == []
+    assert any("IndicTrans2 unavailable" in n for n in lesson.trace.notes)
+
+
+def test_requesting_the_composed_language_again_is_a_no_op():
+    client = FakeClient(json_responses=[GOOD_LESSON], tamil_responses=[GOOD_TAMIL])
+    lesson = lesson_generator.generate(CHUNK, None, translate_to=["ta"], client=client)
+
+    assert lesson.translations == []
+
+
+# ------------------------------------------------------------------ non-Tamil composition
+
+
+HINDI_LESSON = (
+    "देखिए, पत्ती को एक रसोई समझिए। उसमें जो chlorophyll है वही रसोइया है। "
+    "sunlight चूल्हे की आग है। हवा से आने वाली carbon dioxide और जड़ों से चढ़ने वाला "
+    "water हमारा सामान है। इनसे पौधा glucose बनाता है और बचा हुआ oxygen बाहर छोड़ देता है।"
+)
+
+
+def test_hindi_uses_the_generic_teacher_prompt_with_its_own_analogies():
+    client = FakeClient(json_responses=[GOOD_LESSON], tamil_responses=[HINDI_LESSON])
+    lesson = lesson_generator.generate(CHUNK, None, language="hi", client=client)
+
+    assert lesson.language == "hi"
+    assert lesson.language_name == "Hindi"
+    assert lesson.regional_origin is ExplanationOrigin.COMPOSED
+    # The generic persona is filled with this language's script name and local scenes.
+    system = client.tamil_calls[0]["system"]
+    assert "Hindi" in system and "हिन्दी" in system
+    assert "चूल्हा" in system  # Hindi kitchen vocabulary, not the Tamil hint
+    # One call only: the Hinglish technical terms mean no concept went missing.
+    assert len(client.tamil_calls) == 1
+
+
+def test_refusal_never_loads_a_translation_model(monkeypatch):
+    """The refusal must stay instant — no model load, even for a non-Tamil language."""
+    monkeypatch.setattr(
+        translate.EN_INDIC, "get", lambda: pytest.fail("refusal triggered a model load")
+    )
+
+    from app.shared.schemas import GroundingResult
+
+    lesson = lesson_generator.generate(
+        GroundingResult(query="unrelated", chunks=[], is_in_scope=False),
+        language="te",
+    )
+
+    assert lesson.source is LessonSource.REFUSED
+    assert lesson.language == "te"
+    assert lesson.refusal_reason
+
+
+# ------------------------------------------------------------------ endpoints
+
+
+@pytest.fixture
+def api():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    return TestClient(app)
+
+
+def test_capabilities_reports_what_actually_loaded(api):
+    body = api.get("/api/tutor/capabilities").json()
+
+    assert set(body["ai4bharat"]) == {"translate", "transliterate", "asr", "tts"}
+    # Nothing is loaded in a test run, and the endpoint says so rather than lying.
+    assert body["ai4bharat"]["asr"]["asr"] == "not loaded yet"
+    assert len(body["languages"]) == 5
+
+
+def test_languages_endpoint_lists_all_five(api):
+    body = api.get("/api/tutor/languages").json()
+
+    assert body["default"] == "ta"
+    assert {lang["code"] for lang in body["languages"]} == {"ta", "hi", "te", "kn", "ml"}
+
+
+def test_speak_returns_503_rather_than_500_when_tts_is_missing(api):
+    response = api.post("/api/tutor/speak", json={"text": "வணக்கம்", "language": "ta"})
+
+    assert response.status_code == 503
+    assert "parler" in response.json()["detail"].lower()
+
+
+def test_listen_returns_503_rather_than_500_when_asr_is_missing(api):
+    response = api.post(
+        "/api/tutor/listen",
+        files={"audio": ("q.wav", b"RIFF....fake", "audio/wav")},
+        data={"language": "ta"},
+    )
+
+    assert response.status_code == 503
+
+
+def test_transliterate_returns_503_rather_than_500_when_indicxlit_is_missing(api):
+    response = api.post(
+        "/api/tutor/transliterate", json={"text": "vanakkam", "language": "ta"}
+    )
+
+    assert response.status_code == 503
