@@ -291,3 +291,83 @@ def test_transliterate_returns_503_rather_than_500_when_indicxlit_is_missing(api
     )
 
     assert response.status_code == 503
+
+
+# ------------------------------------------------------------------ query preparation
+
+
+def test_tanglish_question_reaches_english_for_retrieval(monkeypatch):
+    """The textbook is English, so a Tanglish question must arrive in English.
+
+    Transliterating to Tamil script and then searching an English page matches
+    nothing — a refusal on an in-scope question, which looks exactly like the
+    grounding guardrail working correctly. This test pins the second hop.
+    """
+    from app.tutor import query_prep
+
+    monkeypatch.setattr(transliterate, "to_native", lambda t, l: "தாவரம் எப்படி சாப்பிடும்")
+    monkeypatch.setattr(translate, "to_english", lambda t, l: "how does a plant eat")
+
+    prepared = query_prep.prepare("thavaram epdi saapdum", "ta")
+
+    assert prepared.for_teaching == "தாவரம் எப்படி சாப்பிடும்"   # what the teacher answers
+    assert prepared.for_retrieval == "how does a plant eat"      # what the page is searched with
+    assert prepared.transliterated and prepared.translated
+    assert prepared.models_used == [
+        "IndicXlit roman→native",
+        "IndicTrans2 indic→en (query)",
+    ]
+
+
+def test_english_question_is_never_transliterated_or_translated(monkeypatch):
+    from app.tutor import query_prep
+
+    monkeypatch.setattr(
+        transliterate, "to_native", lambda t, l: pytest.fail("IndicXlit ran on English")
+    )
+    monkeypatch.setattr(
+        translate, "to_english", lambda t, l: pytest.fail("indic→en ran on English")
+    )
+
+    prepared = query_prep.prepare("how do plants make food", "ta")
+
+    assert prepared.for_retrieval == "how do plants make food"
+    assert not prepared.transliterated and not prepared.translated
+
+
+def test_native_script_question_is_translated_without_transliteration(monkeypatch):
+    """Typed directly in Tamil script: no IndicXlit needed, but still needs English."""
+    from app.tutor import query_prep
+
+    monkeypatch.setattr(translate, "to_english", lambda t, l: "how does a plant eat")
+
+    prepared = query_prep.prepare("தாவரம் எப்படி சாப்பிடும்", "ta")
+
+    assert prepared.transliterated is False
+    assert prepared.translated is True
+    assert prepared.for_retrieval == "how does a plant eat"
+
+
+def test_query_prep_degrades_when_neither_model_is_installed(monkeypatch):
+    """Today's real state: nothing installed, so the question is used as typed."""
+    from app.tutor import query_prep
+
+    monkeypatch.setattr(transliterate, "to_native", lambda t, l: None)
+    monkeypatch.setattr(translate, "to_english", lambda t, l: None)
+
+    prepared = query_prep.prepare("thavaram epdi saapdum", "ta")
+
+    assert prepared.for_retrieval == "thavaram epdi saapdum"
+    assert prepared.models_used == []
+
+
+def test_missing_translator_falls_back_to_the_native_script_query(monkeypatch):
+    from app.tutor import query_prep
+
+    monkeypatch.setattr(transliterate, "to_native", lambda t, l: "தாவரம் எப்படி சாப்பிடும்")
+    monkeypatch.setattr(translate, "to_english", lambda t, l: None)
+
+    prepared = query_prep.prepare("thavaram epdi saapdum", "ta")
+
+    assert prepared.for_retrieval == "தாவரம் எப்படி சாப்பிடும்"
+    assert prepared.translated is False

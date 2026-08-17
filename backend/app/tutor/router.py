@@ -22,7 +22,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.shared.schemas import GroundingResult
-from app.tutor import lesson_generator, mock_rag_service
+from app.tutor import lesson_generator, mock_rag_service, query_prep
 from app.tutor.indic import asr, languages, transliterate, tts
 from app.tutor.indic import status as indic_status
 from app.tutor.schemas import TutorLesson
@@ -76,21 +76,18 @@ def explain(
         False, description="Include the grounding trace (source text, checks, backtranslation)"
     ),
 ) -> TutorLesson:
-    query, transliterated = _normalise_query(request.query, request.language)
+    prepared = query_prep.prepare(request.query, request.language)
 
-    grounding = _grounding_provider(request.page_id, query)
+    # Retrieval searches an English page; the teacher answers the question as asked.
+    grounding = _grounding_provider(request.page_id, prepared.for_retrieval)
     lesson = lesson_generator.generate(
         grounding,
-        query,
+        prepared.for_teaching,
         language=request.language,
         translate_to=request.translate_to,
     )
 
-    if transliterated and lesson.trace:
-        lesson.trace.transliterated_query = query
-        if "IndicXlit roman→native" not in lesson.trace.ai4bharat_models_used:
-            lesson.trace.ai4bharat_models_used.append("IndicXlit roman→native")
-
+    _record_query_prep(lesson, prepared)
     if not debug:
         lesson.trace = None
     return lesson
@@ -99,9 +96,11 @@ def explain(
 @router.post("/explain/preview")
 def explain_preview(request: ExplainRequest) -> dict[str, str]:
     """Same lesson, rendered in the demo's on-screen format. Convenience for the frontend."""
-    query, _ = _normalise_query(request.query, request.language)
-    grounding = _grounding_provider(request.page_id, query)
-    lesson = lesson_generator.generate(grounding, query, language=request.language)
+    prepared = query_prep.prepare(request.query, request.language)
+    grounding = _grounding_provider(request.page_id, prepared.for_retrieval)
+    lesson = lesson_generator.generate(
+        grounding, prepared.for_teaching, language=request.language
+    )
     return {"display": lesson_generator.render(lesson)}
 
 
@@ -141,12 +140,19 @@ async def ask(
     if transcript is None:
         raise HTTPException(status_code=503, detail="Speech recognition is unavailable")
 
-    grounding = _grounding_provider(page_id, transcript)
-    lesson = lesson_generator.generate(grounding, transcript, language=language)
+    # The transcript comes back in native script, so it needs the same journey to
+    # English as a typed regional question before it can retrieve anything.
+    prepared = query_prep.prepare(transcript, language)
+    grounding = _grounding_provider(page_id, prepared.for_retrieval)
+    lesson = lesson_generator.generate(
+        grounding, prepared.for_teaching, language=language
+    )
+
     if lesson.trace:
         lesson.trace.ai4bharat_models_used.append("IndicConformer ASR")
-        if not debug:
-            lesson.trace = None
+    _record_query_prep(lesson, prepared)
+    if not debug:
+        lesson.trace = None
     return lesson
 
 
@@ -223,16 +229,16 @@ def capabilities() -> dict[str, object]:
 # ------------------------------------------------------------------ helpers
 
 
-def _normalise_query(query: str | None, language: str) -> tuple[str | None, bool]:
-    """Run IndicXlit on a romanised question before it reaches retrieval.
-
-    English questions are left alone — transliterating "how do plants make food"
-    produces nonsense, so `normalise_query` checks for English markers first.
-    """
-    if not query:
-        return query, False
-    try:
-        return transliterate.normalise_query(query, language)
-    except Exception as exc:  # noqa: BLE001 - never fail a lesson over script handling
-        log.warning("query normalisation skipped: %s", exc)
-        return query, False
+def _record_query_prep(lesson: TutorLesson, prepared: query_prep.PreparedQuery) -> None:
+    """Put the query rewriting in the trace so the demo can show what was searched."""
+    if not lesson.trace:
+        return
+    if prepared.transliterated:
+        lesson.trace.transliterated_query = prepared.for_teaching
+    if prepared.translated:
+        lesson.trace.notes.append(
+            f"retrieved with the translated query: {prepared.for_retrieval!r}"
+        )
+    for model in prepared.models_used:
+        if model not in lesson.trace.ai4bharat_models_used:
+            lesson.trace.ai4bharat_models_used.append(model)
