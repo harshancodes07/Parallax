@@ -28,6 +28,37 @@ class LLMUnavailable(RuntimeError):
     """No API key, SDK missing, or the API refused/failed. Callers fall back to a template."""
 
 
+class LLMRateLimited(LLMUnavailable):
+    """Quota or rate limit. Transient — the request would succeed later.
+
+    Kept distinct because the two must not be handled the same way. A missing
+    model can be answered from a template; a rate limit means we do not know
+    the answer yet, and telling the student "that isn't in this chapter" would
+    be false.
+    """
+
+
+_TRANSIENT_MARKERS = (
+    "429",
+    "rate limit",
+    "rate_limit",
+    "quota",
+    "too_many_requests",
+    "resource_exhausted",
+    "overloaded",
+    "503",
+    "529",
+)
+
+
+def _classify(exc: Exception, context: str) -> LLMUnavailable:
+    message = str(exc)
+    haystack = message.casefold()
+    if any(marker in haystack for marker in _TRANSIENT_MARKERS):
+        return LLMRateLimited(f"{context}: {message}")
+    return LLMUnavailable(f"{context}: {message}")
+
+
 # --------------------------------------------------------------------------------------
 # Provider selection
 # --------------------------------------------------------------------------------------
@@ -129,7 +160,7 @@ class GeminiClient:
         try:
             return client.interactions.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 - one failure mode for every caller
-            raise LLMUnavailable(f"gemini call failed: {exc}") from exc
+            raise _classify(exc, "gemini call failed") from exc
 
     def complete_json(
         self,
@@ -239,7 +270,7 @@ class AnthropicClient:
                 output_config=output_config,
             )
         except Exception as exc:  # noqa: BLE001
-            raise LLMUnavailable(f"lesson generation call failed: {exc}") from exc
+            raise _classify(exc, "lesson generation call failed") from exc
 
         if response.stop_reason == "refusal":
             raise LLMUnavailable("model declined the request")
@@ -274,7 +305,7 @@ class AnthropicClient:
         try:
             response = client.messages.create(**kwargs)
         except Exception as exc:  # noqa: BLE001
-            raise LLMUnavailable(f"text generation call failed: {exc}") from exc
+            raise _classify(exc, "text generation call failed") from exc
 
         if response.stop_reason == "refusal":
             raise LLMUnavailable("model declined the request")

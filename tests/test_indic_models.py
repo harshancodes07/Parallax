@@ -457,3 +457,75 @@ def test_romanised_regional_detection_excludes_english():
     assert transliterate.is_romanised_regional("prakasha samsleshanam") is True
     assert transliterate.is_romanised_regional("how do plants make food") is False
     assert transliterate.is_romanised_regional("தாவரம் எப்படி சாப்பிடும்") is False
+
+
+def test_rate_limited_translation_is_never_reported_as_out_of_scope(monkeypatch):
+    """A quota failure must not be dressed up as the grounding guardrail.
+
+    Observed live: Gemini returned 429, query translation failed, retrieval
+    missed, and the student was told "that isn't in this chapter" — a false
+    claim about their textbook caused entirely by our quota.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.tutor import llm_translate
+    from app.tutor.llm_client import LLMRateLimited
+
+    monkeypatch.setattr(transliterate, "to_native", lambda t, l: None)
+    monkeypatch.setattr(translate, "to_english", lambda t, l: None)
+
+    def rate_limited(*a, **k):
+        raise LLMRateLimited("gemini call failed: 429 quota exceeded")
+
+    monkeypatch.setattr(llm_translate, "to_english", rate_limited)
+
+    response = TestClient(app).post(
+        "/api/tutor/explain", json={"page_id": "pg42", "query": "thavaram epdi saapdum"}
+    )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "try again" in detail.lower()
+    assert "chapter" not in detail.lower()
+
+
+def test_a_genuine_out_of_scope_question_still_refuses_normally(monkeypatch):
+    """The guard must not swallow real refusals — only untrustworthy ones."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    response = TestClient(app).post(
+        "/api/tutor/explain", json={"page_id": "pg42", "query": "what is the capital of france"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["grounded"] is False
+
+
+def test_transient_errors_are_classified_apart_from_missing_models():
+    from app.tutor.llm_client import LLMRateLimited, LLMUnavailable, _classify
+
+    assert isinstance(_classify(Exception("Error code: 429 quota"), "x"), LLMRateLimited)
+    assert isinstance(_classify(Exception("503 overloaded"), "x"), LLMRateLimited)
+    missing = _classify(Exception("no GEMINI_API_KEY"), "x")
+    assert isinstance(missing, LLMUnavailable) and not isinstance(missing, LLMRateLimited)
+
+
+def test_every_route_that_prepares_a_query_can_actually_run():
+    """Guards a NameError class of bug: /explain/speak once called a deleted helper.
+
+    Endpoints with heavyweight dependencies are easy to leave untested and easy
+    to break during a refactor — reaching the 503 proves the handler body ran.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    response = TestClient(app).post(
+        "/api/tutor/explain/speak", json={"page_id": "pg42", "query": "how do plants make food"}
+    )
+
+    assert response.status_code == 503          # TTS not installed, not a crash
+    assert "text-to-speech" in response.json()["detail"].lower()

@@ -49,19 +49,20 @@ def _get_client() -> LLMClient:
 
 
 def to_english(text: str, language_code: str = "ta", client: LLMClient | None = None) -> str | None:
-    """Translate regional / romanised text to English. `None` if no LLM is available."""
+    """Translate regional / romanised text to English.
+
+    Raises `LLMUnavailable` (or `LLMRateLimited`) rather than swallowing the
+    error: the caller has to know *why* it failed. A missing key means "no
+    translator, carry on"; a rate limit means "we could not determine what the
+    student asked", and those must not produce the same answer.
+    """
     if not (text or "").strip():
         return None
 
     lang = languages.get(language_code)
-    try:
-        result = (client or _get_client()).complete_text(
-            system=TRANSLATE_SYSTEM.format(language=lang.english_name),
-            user=text,
-            max_tokens=1000,
-        )
-    except LLMUnavailable as exc:
-        log.info("LLM translation fallback unavailable: %s", exc)
-        return None
-
+    result = (client or _get_client()).complete_text(
+        system=TRANSLATE_SYSTEM.format(language=lang.english_name),
+        user=text,
+        max_tokens=1000,
+    )
     return result.strip() or None

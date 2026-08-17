@@ -22,7 +22,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.shared.schemas import GroundingResult
-from app.tutor import lesson_generator, mock_rag_service, query_prep
+from app.tutor import lesson_cache, lesson_generator, mock_rag_service, query_prep
 from app.tutor.indic import asr, languages, transliterate, tts
 from app.tutor.indic import status as indic_status
 from app.tutor.schemas import TutorLesson
@@ -76,6 +76,17 @@ def explain(
         False, description="Include the grounding trace (source text, checks, backtranslation)"
     ),
 ) -> TutorLesson:
+    # Checked before any model call: re-asking the same question during a demo
+    # must not spend quota (a Gemini free tier is ~5 lessons' worth).
+    cache_key = lesson_cache.key(
+        request.page_id, request.query, request.language, request.translate_to
+    )
+    cached = lesson_cache.get(cache_key)
+    if cached is not None:
+        if not debug:
+            cached.trace = None
+        return cached
+
     prepared = query_prep.prepare(request.query, request.language)
 
     # Retrieval searches an English page; the teacher answers the question as asked.
@@ -87,6 +98,8 @@ def explain(
         translate_to=request.translate_to,
     )
 
+    _guard_untrustworthy_refusal(lesson, prepared)
+    lesson_cache.put(cache_key, lesson)
     _record_query_prep(lesson, prepared)
     if not debug:
         lesson.trace = None
@@ -174,9 +187,11 @@ def speak(request: SpeakRequest) -> Response:
 @router.post("/explain/speak")
 def explain_and_speak(request: ExplainRequest) -> Response:
     """The whole hands-free output path: lesson composed, then read aloud."""
-    query, _ = _normalise_query(request.query, request.language)
-    grounding = _grounding_provider(request.page_id, query)
-    lesson = lesson_generator.generate(grounding, query, language=request.language)
+    prepared = query_prep.prepare(request.query, request.language)
+    grounding = _grounding_provider(request.page_id, prepared.for_retrieval)
+    lesson = lesson_generator.generate(
+        grounding, prepared.for_teaching, language=request.language
+    )
 
     audio = tts.speak(lesson.tamil_explanation, request.language)
     if audio is None:
@@ -216,6 +231,13 @@ def list_languages() -> dict[str, object]:
     return {"default": "ta", "languages": languages.supported()}
 
 
+@router.post("/cache/clear")
+def clear_cache() -> dict[str, object]:
+    """Force the next question to hit the model again. Useful after a prompt change."""
+    lesson_cache.clear()
+    return lesson_cache.stats()
+
+
 @router.get("/capabilities")
 def capabilities() -> dict[str, object]:
     """Which AI4Bharat models are actually loaded right now.
@@ -223,10 +245,38 @@ def capabilities() -> dict[str, object]:
     Worth having on screen during the demo: it distinguishes "wired up" from
     "running", and it is the honest answer when a judge asks what is real.
     """
-    return {"ai4bharat": indic_status(), "languages": languages.supported()}
+    return {
+        "ai4bharat": indic_status(),
+        "languages": languages.supported(),
+        "lesson_cache": lesson_cache.stats(),
+    }
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _guard_untrustworthy_refusal(
+    lesson: TutorLesson, prepared: query_prep.PreparedQuery
+) -> None:
+    """Never let a quota failure be reported to a student as "not in this chapter".
+
+    If the question needed translating and the translator was rate-limited, we
+    never worked out what was asked — so retrieval missed for our reasons, not
+    theirs. Saying "that isn't in this chapter" would be a false statement about
+    the textbook, and it is the one kind of wrong answer this branch exists to
+    prevent. A 503 is the honest reply: come back in a moment.
+    """
+    if lesson.grounded or not prepared.blocked_reason:
+        return
+    log.warning("suppressing refusal: %s", prepared.blocked_reason)
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "I couldn't read your question just now — the language service is busy. "
+            "Please try again in a moment. (This is not a judgement about your "
+            "textbook page.)"
+        ),
+    )
 
 
 def _record_query_prep(lesson: TutorLesson, prepared: query_prep.PreparedQuery) -> None:

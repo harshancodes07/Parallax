@@ -246,3 +246,62 @@ def test_generate_accepts_a_full_grounding_result(grounding, fake_client):
 
     assert lesson.grounded is True
     assert lesson.source_pages == [42, 43]
+
+
+# ------------------------------------------------------------------ lesson cache
+
+
+def test_repeating_a_question_does_not_call_the_model_again(monkeypatch):
+    """Quota protection: a demo asks the same three questions all evening."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.tutor import lesson_cache, lesson_generator as lg
+
+    lesson_cache.clear()
+    # pg42 retrieves two chunks, so the concept list includes "energy" and the
+    # lesson must map it or validation (correctly) rejects the answer.
+    full = copy.deepcopy(GOOD_LESSON)
+    full["analogy_map"].append(
+        {"concept": "energy", "analogy_component": "the heat the flame gives off"}
+    )
+    client = FakeClient(json_responses=[full], tamil_responses=[GOOD_TAMIL, GOOD_TAMIL])
+    monkeypatch.setattr(lg, "_default_client", client)
+
+    api = TestClient(app)
+    body = {"page_id": "pg42", "query": "how do plants make food"}
+    first = api.post("/api/tutor/explain", json=body).json()
+
+    # Snapshot rather than assert absolute counts: the first lesson may legitimately
+    # regenerate. What matters is that the *second* ask costs nothing at all.
+    spent = (len(client.json_calls), len(client.tamil_calls), len(client.claim_calls))
+
+    second = api.post("/api/tutor/explain", json=body).json()
+
+    assert first["tamil_explanation"] == second["tamil_explanation"]
+    assert (len(client.json_calls), len(client.tamil_calls), len(client.claim_calls)) == spent
+    lesson_cache.clear()
+
+
+def test_refusals_are_not_cached(monkeypatch):
+    """Cheap to recompute, and caching a refusal would outlive the reason for it."""
+    from app.tutor import lesson_cache
+    from app.tutor.schemas import LessonSource, TutorLesson
+
+    lesson_cache.clear()
+    k = lesson_cache.key("pg42", "q", "ta", [])
+    lesson_cache.put(k, TutorLesson(topic="x", grounded=False, source=LessonSource.REFUSED))
+
+    assert lesson_cache.get(k) is None
+
+
+def test_template_fallbacks_are_not_cached():
+    """A degraded lesson deserves another go at the real thing."""
+    from app.tutor import lesson_cache
+    from app.tutor.schemas import LessonSource, TutorLesson
+
+    lesson_cache.clear()
+    k = lesson_cache.key("pg42", "q", "ta", [])
+    lesson_cache.put(k, TutorLesson(topic="x", grounded=True, source=LessonSource.TEMPLATE_FALLBACK))
+
+    assert lesson_cache.get(k) is None

@@ -30,6 +30,7 @@ import logging
 from dataclasses import dataclass, field
 
 from app.tutor import llm_translate
+from app.tutor.llm_client import LLMRateLimited, LLMUnavailable
 from app.tutor.indic import translate, transliterate
 
 log = logging.getLogger(__name__)
@@ -50,6 +51,11 @@ class PreparedQuery:
     transliterated: bool = False
     translated: bool = False
     models_used: list[str] = field(default_factory=list)
+    blocked_reason: str | None = None
+    """Set when translation was needed but transiently refused (quota, overload).
+
+    The question could not be understood, so any "out of scope" verdict that
+    follows is untrustworthy and the router turns it into a 503 instead."""
 
 
 def prepare(query: str | None, language_code: str = "ta") -> PreparedQuery:
@@ -58,6 +64,7 @@ def prepare(query: str | None, language_code: str = "ta") -> PreparedQuery:
 
     native, transliterated = _transliterate(query, language_code)
     models: list[str] = []
+    blocked: str | None = None
     if transliterated:
         models.append("IndicXlit roman→native")
 
@@ -84,12 +91,24 @@ def prepare(query: str | None, language_code: str = "ta") -> PreparedQuery:
             # IndicTrans2 can't run here (no Windows wheels). The LLM handles this
             # hop well, and getting the question into English matters more than
             # which engine does it.
-            english = llm_translate.to_english(native, language_code)
+            try:
+                english = llm_translate.to_english(native, language_code)
+            except LLMRateLimited as exc:
+                # We could not work out what the student asked. Retrieval will
+                # miss, and reporting that as "not in this chapter" would be a
+                # lie about their question rather than the truth about our quota.
+                log.warning("query translation rate-limited: %s", exc)
+                blocked = str(exc)
+                english = None
+            except LLMUnavailable as exc:
+                log.info("no LLM translator: %s", exc)
+                english = None
+
             if english:
                 for_retrieval = english
                 translated = True
                 models.append("LLM query translation (IndicTrans2 unavailable)")
-            else:
+            elif not blocked:
                 log.info("no translator at all; retrieving with the question as typed")
 
     return PreparedQuery(
@@ -99,6 +118,7 @@ def prepare(query: str | None, language_code: str = "ta") -> PreparedQuery:
         transliterated=transliterated,
         translated=translated,
         models_used=models,
+        blocked_reason=blocked,
     )
 
 
