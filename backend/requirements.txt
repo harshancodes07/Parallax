@@ -36,3 +36,8 @@ httpx>=0.27          # fastapi TestClient
 # onnxruntime>=1.20.1
 # soundfile>=0.12
 # parler-tts @ git+https://github.com/huggingface/parler-tts.git
+
+# --- RAG / grounding (rag branch) ---
+chromadb>=1.5             # vector store, one collection per doc_id
+sentence-transformers>=5.7  # multilingual-e5 embeddings (pulls torch on first install)
+numpy>=2.0

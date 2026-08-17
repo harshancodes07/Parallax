@@ -1,0 +1,23 @@
+{
+  "in_scope": [
+    "What is photosynthesis?",
+    "Where does photosynthesis take place in a plant?",
+    "What gas do plants release during photosynthesis?",
+    "Why do plants kept in the dark turn pale?",
+    "What is the role of chlorophyll?",
+    "How does the plant take in carbon dioxide?"
+  ],
+  "out_of_scope": [
+    "Who was the first prime minister of India?",
+    "What is the Pythagoras theorem?",
+    "Explain Newton's second law of motion.",
+    "What is the capital of France?",
+    "How do I solve a quadratic equation?",
+    "What is the human digestive system made of?",
+
+    "What is respiration in plants?",
+    "How do plants transport water through the stem?",
+    "What is transpiration?",
+    "Describe the structure of a plant cell."
+  ]
+}
