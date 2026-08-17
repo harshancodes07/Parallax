@@ -68,7 +68,13 @@ def prepare(query: str | None, language_code: str = "ta") -> PreparedQuery:
     # Only translate when the question is actually in the regional language. A
     # question typed in English is already in the corpus language — running it
     # through a translator would only add noise.
-    if transliterated or _is_native_script(native):
+    #
+    # The romanised case is the one that bit us: with IndicXlit unavailable the
+    # text stays in Roman letters, so checking only "was transliterated" or "is
+    # native script" skipped translation entirely and the question was refused as
+    # out of scope. Tanglish needs translating whether or not we converted the
+    # script first — and both translators accept it romanised.
+    if transliterated or _is_native_script(native) or transliterate.is_romanised_regional(native):
         english = translate.to_english(native, language_code)
         if english:
             for_retrieval = english

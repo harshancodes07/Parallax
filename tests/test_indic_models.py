@@ -430,3 +430,30 @@ def test_backtranslation_engine_is_none_when_nothing_can_translate(monkeypatch):
 
     assert report.backtranslation_engine == "none"
     assert report.backtranslation_available is False
+
+
+def test_tanglish_is_translated_even_when_indicxlit_is_missing(monkeypatch):
+    """Regression: this exact query was refused as out of scope on a real run.
+
+    With IndicXlit unavailable the text stays romanised, so gating translation on
+    "was transliterated or is native script" skipped it entirely — and a refusal
+    on a valid question is indistinguishable from the guardrail working.
+    """
+    from app.tutor import llm_translate, query_prep
+
+    monkeypatch.setattr(transliterate, "to_native", lambda t, l: None)   # IndicXlit missing
+    monkeypatch.setattr(translate, "to_english", lambda t, l: None)      # IndicTrans2 missing
+    monkeypatch.setattr(llm_translate, "to_english", lambda t, l: "how does a plant eat")
+
+    prepared = query_prep.prepare("thavaram epdi saapdum", "ta")
+
+    assert prepared.transliterated is False
+    assert prepared.translated is True
+    assert prepared.for_retrieval == "how does a plant eat"
+
+
+def test_romanised_regional_detection_excludes_english():
+    assert transliterate.is_romanised_regional("thavaram epdi saapdum") is True
+    assert transliterate.is_romanised_regional("prakasha samsleshanam") is True
+    assert transliterate.is_romanised_regional("how do plants make food") is False
+    assert transliterate.is_romanised_regional("தாவரம் எப்படி சாப்பிடும்") is False

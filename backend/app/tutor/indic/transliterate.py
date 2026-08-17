@@ -52,6 +52,17 @@ def looks_romanised(text: str) -> bool:
     return bool(_LATIN_WORD.search(text or "")) and not _NATIVE_SCRIPT.search(text or "")
 
 
+def is_romanised_regional(text: str) -> bool:
+    """Roman letters, but not English — i.e. Tanglish.
+
+    Separate from `looks_romanised` because callers need this answer even when
+    IndicXlit is unavailable: the text is still a regional question that needs
+    translating before it can retrieve from an English page, whether or not we
+    managed to convert it to native script first.
+    """
+    return looks_romanised(text) and not _is_probably_english(text)
+
+
 def to_native(text: str, language_code: str) -> str | None:
     """Tanglish → Tamil script. `None` if IndicXlit is unavailable."""
     if not (text or "").strip():
