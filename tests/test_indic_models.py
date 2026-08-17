@@ -371,3 +371,62 @@ def test_missing_translator_falls_back_to_the_native_script_query(monkeypatch):
 
     assert prepared.for_retrieval == "தாவரம் எப்படி சாப்பிடும்"
     assert prepared.translated is False
+
+
+# ------------------------------------------------------------------ LLM fallback
+
+
+def test_llm_translates_the_query_when_indictrans2_is_unavailable(monkeypatch):
+    """Windows can't build IndicTransToolkit, so the LLM covers the query hop."""
+    from app.tutor import llm_translate, query_prep
+
+    monkeypatch.setattr(transliterate, "to_native", lambda t, l: "தாவரம் எப்படி சாப்பிடும்")
+    monkeypatch.setattr(translate, "to_english", lambda t, l: None)          # IndicTrans2 down
+    monkeypatch.setattr(llm_translate, "to_english", lambda t, l: "how does a plant eat")
+
+    prepared = query_prep.prepare("thavaram epdi saapdum", "ta")
+
+    assert prepared.for_retrieval == "how does a plant eat"
+    assert prepared.translated is True
+    assert "LLM query translation (IndicTrans2 unavailable)" in prepared.models_used
+
+
+def test_indictrans2_is_preferred_over_the_llm_when_both_are_available(monkeypatch):
+    from app.tutor import llm_translate, query_prep
+
+    monkeypatch.setattr(transliterate, "to_native", lambda t, l: "தாவரம்")
+    monkeypatch.setattr(translate, "to_english", lambda t, l: "from indictrans2")
+    monkeypatch.setattr(
+        llm_translate, "to_english", lambda t, l: pytest.fail("LLM ran despite IndicTrans2")
+    )
+
+    assert query_prep.prepare("thavaram", "ta").for_retrieval == "from indictrans2"
+
+
+def test_llm_backtranslation_is_labelled_as_the_weaker_check(monkeypatch):
+    """Self-validation must never be reported as an independent check."""
+    from app.tutor import llm_translate
+
+    monkeypatch.setattr(tamil_quality.translate, "to_english", lambda t, l: None)
+    monkeypatch.setattr(
+        llm_translate,
+        "to_english",
+        lambda t, l: "The chlorophyll uses sunlight, carbon dioxide, water to make glucose "
+        "and releases oxygen, giving energy.",
+    )
+
+    report = tamil_quality.evaluate(GOOD_TAMIL, CHUNK.concepts, "ta")
+
+    assert report.backtranslation_available is True
+    assert report.backtranslation_engine == "llm"     # not "indictrans2"
+    assert "weaker" in report.note
+    assert report.passed
+
+
+def test_backtranslation_engine_is_none_when_nothing_can_translate(monkeypatch):
+    monkeypatch.setattr(tamil_quality.translate, "to_english", lambda t, l: None)
+
+    report = tamil_quality.evaluate(GOOD_TAMIL, CHUNK.concepts, "ta")
+
+    assert report.backtranslation_engine == "none"
+    assert report.backtranslation_available is False

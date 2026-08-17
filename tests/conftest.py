@@ -6,6 +6,7 @@ calls, so `pytest` is green on a laptop with no API key.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,21 @@ import pytest
 BACKEND = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
+
+# Kill switches BEFORE the app imports. Without these, any test that reaches a
+# LazyComponent tries to import torch + transformers and load real weights —
+# which cost 20s on the first miss and would download gigabytes on a machine
+# where they'd actually succeed. Tests assert the contract around the models,
+# never the models themselves.
+for _switch in (
+    "TUTOR_INDIC_EN",
+    "TUTOR_EN_INDIC",
+    "TUTOR_INDIC_INDIC",
+    "TUTOR_ASR",
+    "TUTOR_TTS",
+    "TUTOR_XLIT",
+):
+    os.environ.setdefault(_switch, "0")
 
 from app.tutor.llm_client import CHECK_MODEL, LLMUnavailable  # noqa: E402
 
@@ -104,6 +120,19 @@ GOOD_TAMIL = (
     "water-உம் தான் நம்ம சாமான். இதுல இருந்து செடி glucose-ஐ தயார் பண்ணுது. மிச்சம் வர்ற oxygen "
     "வெளிய போயிடும். அது தான் நாம சுவாசிக்கறோம்."
 )
+
+
+@pytest.fixture(autouse=True)
+def no_llm_translation_fallback(monkeypatch):
+    """Stop the LLM translation fallback from making real network calls.
+
+    `llm_translate` builds its own client rather than using the injected fake, so
+    on a machine that happens to have GEMINI_API_KEY set, every test touching the
+    Tamil check would hit the API. Tests that want the fallback stub it themselves.
+    """
+    from app.tutor import llm_translate
+
+    monkeypatch.setattr(llm_translate, "to_english", lambda *a, **k: None)
 
 
 @pytest.fixture

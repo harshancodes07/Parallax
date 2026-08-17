@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from app.tutor import llm_translate
 from app.tutor.indic import translate, transliterate
 
 log = logging.getLogger(__name__)
@@ -74,7 +75,16 @@ def prepare(query: str | None, language_code: str = "ta") -> PreparedQuery:
             translated = True
             models.append("IndicTrans2 indic→en (query)")
         else:
-            log.info("no indic→en model; retrieving with the native-script question")
+            # IndicTrans2 can't run here (no Windows wheels). The LLM handles this
+            # hop well, and getting the question into English matters more than
+            # which engine does it.
+            english = llm_translate.to_english(native, language_code)
+            if english:
+                for_retrieval = english
+                translated = True
+                models.append("LLM query translation (IndicTrans2 unavailable)")
+            else:
+                log.info("no translator at all; retrieving with the question as typed")
 
     return PreparedQuery(
         original=query,

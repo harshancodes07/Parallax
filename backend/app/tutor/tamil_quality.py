@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from app.tutor import llm_translate
 from app.tutor.grounding_check import missing_concepts
 from app.tutor.indic import translate
 
@@ -36,6 +37,9 @@ class TamilQualityReport:
     missing: list[str] = field(default_factory=list)
     backtranslation: str | None = None
     backtranslation_available: bool = False
+    backtranslation_engine: str = "none"
+    """`indictrans2` | `llm` | `none`. Never let the weaker check pass as the strong one."""
+
     note: str = ""
 
     @property
@@ -51,20 +55,34 @@ def evaluate(
         return TamilQualityReport(missing=list(concepts), note="empty regional explanation")
 
     backtranslation = translate.to_english(regional_text, language_code)
-
-    if backtranslation is None:
+    if backtranslation:
         return TamilQualityReport(
-            missing=missing_concepts(concepts, regional_text),
-            backtranslation_available=False,
+            missing=missing_concepts(concepts, regional_text, backtranslation),
+            backtranslation=backtranslation,
+            backtranslation_available=True,
+            backtranslation_engine="indictrans2",
+            note="checked against IndicTrans2 backtranslation",
+        )
+
+    # Fallback. Weaker on purpose-built grounds: the model that wrote the Tamil is
+    # now grading it, so a concept it dropped while writing may be dropped again
+    # here. Catches gross failures; not the independent check IndicTrans2 gives.
+    backtranslation = llm_translate.to_english(regional_text, language_code)
+    if backtranslation:
+        return TamilQualityReport(
+            missing=missing_concepts(concepts, regional_text, backtranslation),
+            backtranslation=backtranslation,
+            backtranslation_available=True,
+            backtranslation_engine="llm",
             note=(
-                "IndicTrans2 backtranslation unavailable — concepts checked against "
-                "the regional text only"
+                "IndicTrans2 unavailable — backtranslated with the LLM instead "
+                "(self-validation, weaker than an independent model)"
             ),
         )
 
     return TamilQualityReport(
-        missing=missing_concepts(concepts, regional_text, backtranslation),
-        backtranslation=backtranslation,
-        backtranslation_available=True,
-        note="checked against IndicTrans2 backtranslation",
+        missing=missing_concepts(concepts, regional_text),
+        backtranslation_available=False,
+        backtranslation_engine="none",
+        note="no backtranslation engine — concepts checked against the regional text only",
     )
