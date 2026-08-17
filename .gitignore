@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.next/
+.vite/
+
+# Secrets & config
+.env
+.env.*
+!.env.example
+*.pem
+credentials.json
+
+# Model / data artifacts (never commit these)
+*.faiss
+*.index
+chroma_db/
+vectorstore/
+data/uploads/
+data/cache/
+models/
+*.gguf
+*.bin
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+logs/
