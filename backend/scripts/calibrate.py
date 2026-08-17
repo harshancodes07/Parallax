@@ -16,6 +16,7 @@ retrieve() translates to English before it embeds, so English questions are what
 the threshold actually applies to.
 """
 
+import utils.session
 import json
 import sys
 

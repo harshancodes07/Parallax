@@ -44,7 +44,25 @@ cd Parallax
 cp .env.example .env      # add your own API keys; .env is gitignored and never committed
 ```
 
-Setup steps for backend and frontend go here once the first PRs land.
+Backend:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+```
+
+Frontend setup goes here once the UI PR lands.
+
+## Tests
+
+```bash
+pytest backend/tests -m "not slow"   # 56 tests, ~6s, no model download
+pytest backend/tests                 # adds the grounding tests (~1GB model on first run)
+```
+
+The `slow` tests load the real embedding model and assert on real similarity
+scores — they are the regression guard for the grounding threshold. The rest
+stub the store and the model, so they need no API key.
 
 ## Workflow
 

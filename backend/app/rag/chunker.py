@@ -23,6 +23,16 @@ def chunk_page(doc_id: str, page: int, text: str) -> list[Chunk]:
         return []
 
     step = CHUNK_WORDS - CHUNK_OVERLAP_WORDS
+    if step <= 0:
+        # Fail loudly. With a negative step this loop yields no chunks at all,
+        # so the document indexes empty and every question about it comes back
+        # "not in this chapter" — a misconfiguration wearing the costume of a
+        # working guardrail.
+        raise ValueError(
+            f"CHUNK_OVERLAP_WORDS ({CHUNK_OVERLAP_WORDS}) must be less than "
+            f"CHUNK_WORDS ({CHUNK_WORDS})"
+        )
+
     chunks: list[Chunk] = []
     for i, start in enumerate(range(0, len(words), step)):
         window = words[start : start + CHUNK_WORDS]
