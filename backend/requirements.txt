@@ -10,7 +10,6 @@ python-multipart>=0.0.9   # audio uploads on /listen and /ask
 # --- LLM providers: install at least one, pick with LLM_PROVIDER ---
 google-genai>=2.18        # Gemini — free tier, no card. The default if GEMINI_API_KEY is set.
 anthropic>=0.70           # Claude — needs a paid key
-openai>=1.40              # Groq / xAI(Grok) / any OpenAI-compatible endpoint
 
 # --- tests ---
 pytest>=8.0

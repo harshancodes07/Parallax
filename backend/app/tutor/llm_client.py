@@ -64,41 +64,12 @@ def _classify(exc: Exception, context: str) -> LLMUnavailable:
 # --------------------------------------------------------------------------------------
 
 
-# Anything speaking the OpenAI chat-completions API is one provider to us; only the
-# base URL, key and default model differ. Adding OpenRouter or Together is a row.
-OPENAI_COMPATIBLE: dict[str, dict[str, str]] = {
-    "groq": {
-        "base_url": "https://api.groq.com/openai/v1",
-        "key_env": "GROQ_API_KEY",
-        "model": "openai/gpt-oss-120b",
-    },
-    "xai": {
-        "base_url": "https://api.x.ai/v1",
-        "key_env": "XAI_API_KEY",
-        "model": "grok-4.6",
-    },
-}
-
-_PROVIDER_ALIASES = {
-    "gemini": "gemini",
-    "google": "gemini",
-    "anthropic": "anthropic",
-    "claude": "anthropic",
-    "groq": "groq",
-    "grok": "xai",  # people write "grok" for both; xAI is the one that owns the name
-    "xai": "xai",
-}
-
-
 def _detect_provider() -> str:
     explicit = os.getenv("LLM_PROVIDER", "").strip().casefold()
-    if explicit in _PROVIDER_ALIASES:
-        return _PROVIDER_ALIASES[explicit]
-    # No explicit choice: pick by whichever key is present.
-    if os.getenv("GROQ_API_KEY"):
-        return "groq"
-    if os.getenv("XAI_API_KEY"):
-        return "xai"
+    if explicit in {"gemini", "google"}:
+        return "gemini"
+    if explicit in {"anthropic", "claude"}:
+        return "anthropic"
     if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
         return "gemini"
     return "anthropic"
@@ -106,12 +77,7 @@ def _detect_provider() -> str:
 
 PROVIDER = _detect_provider()
 
-if PROVIDER in OPENAI_COMPATIBLE:
-    _preset = OPENAI_COMPATIBLE[PROVIDER]
-    LESSON_MODEL = os.getenv("TUTOR_LESSON_MODEL") or os.getenv("LLM_MODEL") or _preset["model"]
-    CHECK_MODEL = os.getenv("TUTOR_CHECK_MODEL", LESSON_MODEL)
-    LESSON_EFFORT = os.getenv("TUTOR_EFFORT", "")
-elif PROVIDER == "gemini":
+if PROVIDER == "gemini":
     # One model for both jobs — the free tier is fast enough that a separate
     # cheap model for the grounding audit buys nothing.
     LESSON_MODEL = os.getenv("TUTOR_LESSON_MODEL", "gemini-3.7-flash")
@@ -241,128 +207,6 @@ class GeminiClient:
 
 
 # --------------------------------------------------------------------------------------
-# OpenAI-compatible (Groq, xAI/Grok, and anything else with that API)
-# --------------------------------------------------------------------------------------
-
-
-class OpenAICompatibleClient:
-    """Any provider speaking the OpenAI chat-completions API.
-
-    Structured output support varies across these providers and across models on
-    the same provider, and it is not reliably advertised. So we ask for a strict
-    `json_schema` first and, if the provider rejects it, fall back to
-    `json_object` with the schema stated in the prompt. The second path is
-    weaker — the shape is requested rather than enforced — which is exactly why
-    the analogy-coverage and excerpt checks downstream are not optional.
-    """
-
-    def __init__(self, provider: str, api_key: str | None = None) -> None:
-        preset = OPENAI_COMPATIBLE[provider]
-        self.provider = provider
-        self.base_url = os.getenv("LLM_BASE_URL") or preset["base_url"]
-        self._key_env = preset["key_env"]
-        self._explicit_key = api_key
-        self._client: Any | None = None
-        self._schema_mode: str | None = None  # learned on first use, then reused
-
-    @property
-    def _api_key(self) -> str | None:
-        return self._explicit_key or os.getenv(self._key_env) or os.getenv("LLM_API_KEY")
-
-    def _get_client(self) -> Any:
-        if self._client is not None:
-            return self._client
-        try:
-            from openai import OpenAI
-        except ImportError as exc:  # pragma: no cover - environment-dependent
-            raise LLMUnavailable("openai SDK is not installed (pip install openai)") from exc
-        if not self._api_key:
-            raise LLMUnavailable(f"no {self._key_env} in the environment")
-        self._client = OpenAI(api_key=self._api_key, base_url=self.base_url)
-        return self._client
-
-    def _chat(self, *, model: str, system: str, user: str, max_tokens: int, **extra: Any) -> str:
-        client = self._get_client()
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                max_tokens=max_tokens,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                **extra,
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise _classify(exc, f"{self.provider} call failed") from exc
-        return (response.choices[0].message.content or "").strip()
-
-    def complete_json(
-        self,
-        *,
-        system: str,
-        user: str,
-        schema: dict[str, Any],
-        model: str | None = None,
-        max_tokens: int | None = None,
-    ) -> dict[str, Any]:
-        model = model or LESSON_MODEL
-        max_tokens = max_tokens or MAX_TOKENS
-
-        if self._schema_mode != "json_object":
-            try:
-                text = self._chat(
-                    model=model,
-                    system=system,
-                    user=user,
-                    max_tokens=max_tokens,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {"name": "lesson", "schema": schema, "strict": True},
-                    },
-                )
-                self._schema_mode = "json_schema"
-                return _parse_json(text)
-            except LLMRateLimited:
-                raise
-            except LLMUnavailable as exc:
-                log.info("%s rejected json_schema, falling back to json_object: %s", self.provider, exc)
-                self._schema_mode = "json_object"
-
-        text = self._chat(
-            model=model,
-            system=f"{system}\n\nReturn ONLY JSON matching this schema:\n{json.dumps(schema)}",
-            user=user,
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"},
-        )
-        return _parse_json(text)
-
-    def complete_text(
-        self,
-        *,
-        system: str,
-        user: str,
-        model: str | None = None,
-        max_tokens: int | None = None,
-        effort: str | None = None,
-    ) -> str:
-        return self._chat(
-            model=model or LESSON_MODEL,
-            system=system,
-            user=user,
-            max_tokens=max_tokens or MAX_TOKENS,
-        )
-
-
-def _parse_json(text: str) -> dict[str, Any]:
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise LLMUnavailable(f"provider returned non-JSON: {text[:200]}") from exc
-
-
-# --------------------------------------------------------------------------------------
 # Anthropic
 # --------------------------------------------------------------------------------------
 
@@ -483,10 +327,6 @@ def _first_text(response: Any) -> str:
 
 def build_client() -> LLMClient:
     """The client the app runs with, chosen by `LLM_PROVIDER` or by which key exists."""
-    if PROVIDER in OPENAI_COMPATIBLE:
-        client = OpenAICompatibleClient(PROVIDER)
-        log.info("LLM provider: %s (%s) at %s", PROVIDER, LESSON_MODEL, client.base_url)
-        return client
     if PROVIDER == "gemini":
         log.info("LLM provider: gemini (%s)", LESSON_MODEL)
         return GeminiClient()
