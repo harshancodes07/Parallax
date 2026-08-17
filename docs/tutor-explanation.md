@@ -115,12 +115,19 @@ so there's an English-marker check before it runs, with tests pinning both.
 
 ### Environment variables
 
+**Provider is pluggable.** Set `GEMINI_API_KEY` (free tier, no credit card —
+[aistudio.google.com/apikey](https://aistudio.google.com/apikey)) or
+`ANTHROPIC_API_KEY` (paid). With neither, every lesson degrades to the template
+path instead of erroring, which still demos the guardrails.
+
 | Variable | Default | Why |
 |---|---|---|
-| `ANTHROPIC_API_KEY` / `LLM_API_KEY` | — | Either name works. Without one, every lesson degrades to the template path instead of erroring. |
-| `TUTOR_LESSON_MODEL` | `claude-opus-5` | Lesson + Tamil generation. |
-| `TUTOR_CHECK_MODEL` | `claude-haiku-4-5` | The cheap grounding audit. |
-| `TUTOR_EFFORT` | `medium` | Demo-latency choice, not a cost one — at `high` a lesson takes long enough to feel dead on stage. Raise it if quality slips. |
+| `GEMINI_API_KEY` | — | Free tier. Auto-selected when present. |
+| `ANTHROPIC_API_KEY` / `LLM_API_KEY` | — | Claude. Either name works. |
+| `LLM_PROVIDER` | auto | `gemini` \| `anthropic`. Leave blank to pick by whichever key exists. |
+| `TUTOR_LESSON_MODEL` | per provider | `gemini-3.7-flash` / `claude-opus-5`. |
+| `TUTOR_CHECK_MODEL` | per provider | The grounding audit. On Claude this is Haiku — a cheap model is the right tool for a yes/no check. |
+| `TUTOR_EFFORT` | `medium` (Claude only) | Demo-latency choice, not a cost one — at `high` a lesson takes long enough to feel dead on stage. |
 | `TUTOR_INDIC_EN` | `1` | IndicTrans2 backtranslation validation. `0` = skip. |
 | `TUTOR_EN_INDIC` | `1` | IndicTrans2 en→indic fallback. |
 | `TUTOR_INDIC_INDIC` | `1` | IndicTrans2 indic→indic. |

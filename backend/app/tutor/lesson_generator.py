@@ -25,7 +25,7 @@ import uuid
 from app.shared.schemas import GroundingResult, RetrievedChunk
 from app.tutor import grounding_check, prompts, tamil_quality
 from app.tutor.indic import languages, translate
-from app.tutor.llm_client import LESSON_SCHEMA, LLMClient, LLMUnavailable
+from app.tutor.llm_client import LESSON_SCHEMA, LLMClient, LLMUnavailable, build_client
 from app.tutor.schemas import (
     ConceptMapping,
     ExplanationOrigin,
@@ -48,7 +48,7 @@ REFUSAL_TAMIL = (
     "சொல்ல முடியும். அந்த page-ல இருக்கற ஏதாவது கேளுங்க, இல்லைன்னா சரியான page-ஐ upload பண்ணுங்க."
 )
 
-_default_client = LLMClient()
+_default_client = build_client()
 
 
 def generate(
