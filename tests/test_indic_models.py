@@ -529,3 +529,65 @@ def test_every_route_that_prepares_a_query_can_actually_run():
 
     assert response.status_code == 503          # TTS not installed, not a crash
     assert "text-to-speech" in response.json()["detail"].lower()
+
+
+# ------------------------------------------------------------------ provider selection
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [("groq", "groq"), ("grok", "xai"), ("xai", "xai"), ("gemini", "gemini"), ("claude", "anthropic")],
+)
+def test_provider_aliases(env_value, expected):
+    """'grok' and 'groq' are different companies; both spellings must land somewhere sane."""
+    from app.tutor.llm_client import _PROVIDER_ALIASES
+
+    assert _PROVIDER_ALIASES[env_value] == expected
+
+
+def test_openai_compatible_presets_are_complete():
+    from app.tutor.llm_client import OPENAI_COMPATIBLE
+
+    for name, preset in OPENAI_COMPATIBLE.items():
+        assert preset["base_url"].startswith("https://"), name
+        assert preset["key_env"].endswith("_API_KEY"), name
+        assert preset["model"], name
+
+
+def test_openai_client_falls_back_from_json_schema_to_json_object(monkeypatch):
+    """Structured-output support varies by provider and model, and isn't advertised."""
+    from app.tutor.llm_client import LLMUnavailable, OpenAICompatibleClient
+
+    client = OpenAICompatibleClient("groq", api_key="test")
+    seen: list[dict] = []
+
+    def fake_chat(*, model, system, user, max_tokens, **extra):
+        seen.append(extra)
+        if extra.get("response_format", {}).get("type") == "json_schema":
+            raise LLMUnavailable("groq call failed: 400 json_schema unsupported")
+        return '{"topic": "ok"}'
+
+    monkeypatch.setattr(client, "_chat", fake_chat)
+
+    assert client.complete_json(system="s", user="u", schema={"type": "object"}) == {"topic": "ok"}
+    assert [e["response_format"]["type"] for e in seen] == ["json_schema", "json_object"]
+    # The lesson is learned, so the next call skips the doomed attempt.
+    seen.clear()
+    client.complete_json(system="s", user="u", schema={"type": "object"})
+    assert [e["response_format"]["type"] for e in seen] == ["json_object"]
+
+
+def test_rate_limits_are_not_mistaken_for_missing_schema_support(monkeypatch):
+    """A 429 must propagate, not silently downgrade the request to a weaker mode."""
+    from app.tutor.llm_client import LLMRateLimited, OpenAICompatibleClient
+
+    client = OpenAICompatibleClient("groq", api_key="test")
+
+    def rate_limited(**kwargs):
+        raise LLMRateLimited("groq call failed: 429 rate limit")
+
+    monkeypatch.setattr(client, "_chat", rate_limited)
+
+    with pytest.raises(LLMRateLimited):
+        client.complete_json(system="s", user="u", schema={"type": "object"})
+    assert client._schema_mode is None
