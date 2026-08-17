@@ -21,6 +21,11 @@ import sys
 
 from app.rag.store import ingest, query
 
+# A threshold is only trustworthy if in-scope and out-of-scope scores separate by
+# more than the noise from rephrasing a question. Anything tighter than this is a
+# coin flip dressed up as a number.
+MIN_MARGIN = 0.02
+
 
 def main(doc_path: str, questions_path: str) -> int:
     doc = json.loads(open(doc_path).read())
@@ -46,17 +51,38 @@ def main(doc_path: str, questions_path: str) -> int:
 
     worst_in = min(s for _, s in in_scores)
     best_out = max(s for _, s in out_scores)
+    margin = worst_in - best_out
     print(f"\nworst in-scope : {worst_in:.3f}")
     print(f"best out-of-scope: {best_out:.3f}")
+    print(f"margin           : {margin:+.3f}")
 
-    if worst_in > best_out:
+    if margin >= MIN_MARGIN:
         print(f"\nclean separation — set RAG_SCORE_THRESHOLD={(worst_in + best_out) / 2:.2f}")
         return 0
 
+    if margin > 0:
+        print(
+            f"\nSEPARATION TOO NARROW ({margin:.3f} < {MIN_MARGIN}). A threshold exists but\n"
+            f"only just: set RAG_SCORE_THRESHOLD={(worst_in + best_out) / 2:.2f} and expect it to\n"
+            "misclassify on rephrasing. The similarity gate is NOT doing this job on\n"
+            "its own — the refusal sentinel in guardrail.py is load-bearing, not a\n"
+            "backstop. Treat it accordingly."
+        )
+    else:
+        print(
+            "\nNO CLEAN SEPARATION. No single threshold separates these questions."
+        )
+
     print(
-        "\nNO CLEAN SEPARATION. No single threshold separates these questions.\n"
-        "Fix the retrieval before tuning the number: try smaller chunks, or a\n"
-        "stronger multilingual model (BAAI/bge-m3) via EMBED_MODEL."
+        "\nWhich fix depends on WHICH questions are leaking through:\n"
+        "  - unrelated subjects (history, algebra) scoring high => retrieval is weak.\n"
+        "    Try a stronger multilingual model (BAAI/bge-m3) via EMBED_MODEL.\n"
+        "  - same-subject, adjacent-topic questions scoring high => expected, and no\n"
+        "    threshold fixes it. Cosine similarity measures topical relatedness, not\n"
+        "    answerability, and 'respiration' really is close to a photosynthesis page.\n"
+        "    Smaller chunks make this WORSE, not better (measured): a short chunk lets\n"
+        "    an off-topic question match a fragment. Set the threshold just above the\n"
+        "    unrelated-subject band and let the guardrail sentinel judge the rest."
     )
     return 1
 

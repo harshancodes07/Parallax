@@ -59,7 +59,12 @@ def answer(doc_id: str, question: str) -> dict:
         # max_tokens caps thinking + visible text together on Opus 5, so leave
         # headroom above the length of the answer you actually want.
         max_tokens=3000,
-        output_config={"effort": "low"},
+        # Not "low". Calibration showed the similarity gate cannot separate
+        # same-subject, adjacent-topic questions ("respiration" scores 0.844
+        # against a photosynthesis page; the worst genuine in-scope question
+        # scores 0.846). So this call is the primary grounding gate, not a
+        # backstop, and it gets the effort that deserves.
+        output_config={"effort": "high"},
         system=SYSTEM,
         messages=[
             {
@@ -70,6 +75,18 @@ def answer(doc_id: str, question: str) -> dict:
     )
 
     text = "".join(b.text for b in resp.content if b.type == "text").strip()
+
+    # No text at all means the safety classifier declined the request, or thinking
+    # consumed max_tokens before any answer was written. An empty string does not
+    # contain the sentinel, so without this it would fall through as a grounded
+    # answer that says nothing — the exact failure this module exists to prevent.
+    if resp.stop_reason == "refusal" or not text:
+        return {
+            "grounded": False,
+            "text": None,
+            "reason": "no_answer",
+            "top_score": hit["top_score"],
+        }
 
     if REFUSAL_SENTINEL in text:
         return {
